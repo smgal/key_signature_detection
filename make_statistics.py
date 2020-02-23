@@ -1,5 +1,7 @@
 import os
 import midi
+from typing import List, Tuple
+
 
 def getFileList(current_dir: str, filters: [] = None) -> []:
 	_all_files = []
@@ -12,7 +14,8 @@ def getFileList(current_dir: str, filters: [] = None) -> []:
 
 	return _all_files
 
-def getOffsetBySharps(sharps: int, is_major_scale: bool) -> int:
+
+def getOffsetBySharps(num_sharps: int, is_major_scale: bool) -> int:
 	''' in case of the major scale
 	Cb	Db	Eb	Fb	Gb	Ab	Bb	7 flats
 	Gb	Ab	Bb	Cb	Db	Eb	F	6 flats
@@ -49,139 +52,178 @@ def getOffsetBySharps(sharps: int, is_major_scale: bool) -> int:
 	'''
 	OFFSET_TABLE = {
 		'major': [0, 7, 2, 9, 4, 11, 6, 1, 11, 6, 1, 8, 3, 10, 5],
-		# XXX(ykahn)
-		'minor': [0, 7, 2, 9, 4, 11, 6, 1, 11, 6, 1, 8, 3, 10, 5]
+		'minor': [9, 4, 11, 6, 1, 8, 3, 10, 8, 3, 10, 5, 0, 7, 2]
 	}
 
-	if abs(sharps) <= 7:
-		return OFFSET_TABLE['major' if is_major_scale else 'minor'][sharps]
+	if abs(num_sharps) <= 7:
+		return OFFSET_TABLE['major' if is_major_scale else 'minor'][num_sharps]
 	else:
 		return 0
 
 
-if __name__ == "__main__":
+def getKeySignatureBySharps(num_sharps: int, is_major_scale: bool) -> str:
+	OFFSET_TABLE = {
+		'major': ['C', 'G', 'D', 'A', 'E', 'B', 'F#','C#', 'Cb', 'Gb', 'Db', 'Ab', 'Eb', 'Bb', 'F'],
+		'minor': ['A', 'E', 'B', 'F#', 'C#', 'G#', 'D#', 'A#', 'Ab', 'Eb', 'Bb', 'F', 'C', 'G', 'D' ]
+	}
 
-	histogram = [[0]*12 for i in range(2)]
+	if abs(num_sharps) <= 7:
+		return OFFSET_TABLE['major' if is_major_scale else 'minor'][num_sharps]
+	else:
+		return '??'
 
-	all_files = getFileList('_data', ['.mid', '.midi'])
 
-	for file_name in all_files:
+class MidiNote:
+	pitch: int
+	time_beg: float
+	time_end: float
+	velocity: int
 
-		cannot_process = False
+	def __init__(self, pitch: int, time_beg: float, time_end: float, velocity: int):
+		self.pitch = pitch
+		self.time_beg = time_beg
+		self.time_end = time_end
+		self.velocity = velocity
 
-		try:
-			pattern = midi.read_midifile(file_name)
-		except Exception as ex:
-			if len(ex.args) >= 2:
-				if ex.args[1] == b'RIFF':
-					print("ERROR(RMID format): {0}".format(file_name))
-					continue
-				elif ex.args[1] == b'':
-					print("ERROR(Empty file): {0}".format(file_name))
-					continue
 
-			print("ERROR({1}): {0}".format(file_name, ex.args[0]))
-			continue
+class MidiStruct:
 
+	def __init__(self, pattern: midi.Pattern):
 		pattern.make_ticks_abs()
 
-		tracks = midi.Track(pattern)
+		self.tracks = midi.Track(pattern)
+		self.resolution = pattern.resolution
+		self.bpm = 100
+		self.max_channel = -1
+		self.beats = 4
+		self.beat_type = 4
+		self.num_sharps = 0
+		self.is_major_scale = True
+		self.scale_verified = False
 
-		resolution = pattern.resolution
-		bpm = 0
-		max_channel = -1
-		beats = 0
-		beat_type = 0
-		num_sharp = 0
-		is_major_scale = True
+		_complete_bits = 0
 
-		for track in tracks:
-
+		for track in self.tracks:
 			for event in track:
-				if isinstance(event, midi.events.ProgramChangeEvent):
-					if event.channel == 9:
-						break
 
-				if isinstance(event, midi.events.TimeSignatureEvent):
-					# data=[4, 2, 24, 8]
-					if beats <= 0:
-						beats = event.data[0]
-						if beat_type <= 0:
-							beat_type = 1 << event.data[1]
+				# beats and beat type
+				if (_complete_bits & 0x01) == 0 and isinstance(event, midi.events.TimeSignatureEvent):
+					# TODO(ykahn): Time signature can be changed while playing
 
-				if isinstance(event, midi.events.SetTempoEvent):
-					tempo_in_msec = (event.data[0] & 0xFF) << 16 | (event.data[1] & 0xFF) << 8 | (event.data[2] & 0xFF)
-					if tempo_in_msec > 0:
-						bpm = 1000000 * 60 // tempo_in_msec
+					self.beats = event.numerator
+					self.beat_type = event.denominator
+					_complete_bits |= 0x01
 
-				if isinstance(event, midi.events.KeySignatureEvent):
-					num_sharp = event.data[0]
-					num_sharp = num_sharp if num_sharp < 0x80 else num_sharp - 256
-					is_major_scale = (event.data[1] == 0)
+				# tempo
+				if (_complete_bits & 0x02) == 0 and isinstance(event, midi.events.SetTempoEvent):
+					# TODO(ykahn): Tempo can be changed while playing
 
-		if beats == 0:
-			beats = 4
-			beat_type = 4
+					self.bpm = int(event.bpm)
+					_complete_bits |= 0x02
 
-		if resolution <= 0:
-			cannot_process = True
+				# key signature and scale
+				if (_complete_bits & 0x04) == 0 and isinstance(event, midi.events.KeySignatureEvent):
+					# TODO(ykahn): Key signature can be changed while playing
 
-		# test for each scale
-		# if num_sharp == 0 and is_major_scale:
-		# 	cannot_process = True
+					self.num_sharps = event.alternatives
+					self.is_major_scale = (event.minor == 0)
+					self.scale_verified = abs(self.num_sharps) <= 7
+					_complete_bits |= 0x04
 
-		if cannot_process:
-			break
+				if isinstance(event, midi.events.NoteOnEvent):
+					if self.max_channel < event.channel:
+						self.max_channel = event.channel
 
-		note_offset = getOffsetBySharps(num_sharp, is_major_scale)
+	def getFullNotes(self) -> Tuple[List[List[MidiNote]], int]:
 
-		for track in tracks:
+		noduvels = [[] for i in range(self.max_channel + 1)]
 
+		for track in self.tracks:
+
+			# FIXME(ykahn): It should be created using List.
 			incomplete = {}
 			incomplete_2nd = {}
 
 			for event in track:
-				
-				if isinstance(event, midi.events.NoteOnEvent) and event.velocity > 0:
-					time_stamp = event.tick / resolution / beats
+				is_note_on = isinstance(event, midi.events.NoteOnEvent) and event.velocity > 0
+				is_note_off = isinstance(event, midi.events.NoteOffEvent) or (isinstance(event, midi.events.NoteOnEvent) and event.velocity == 0)
+
+				# Skip percussion channels
+				if (is_note_on or is_note_off) and event.channel == 9:
+					continue
+
+				if is_note_on:
+					time_stamp = event.tick / self.resolution / self.beats
 					key = event.channel << 8 | event.pitch
 					if not key in incomplete:
 						incomplete[key] = [time_stamp, event.velocity]
 					elif not key in incomplete_2nd:
 						incomplete_2nd[key] = [time_stamp, event.velocity]
 					else:
-						print("[WARNING] Too many intersections")
+						print('[WARNING] Too many intersections')
 
-				if isinstance(event, midi.events.NoteOffEvent) or (isinstance(event, midi.events.NoteOnEvent) and event.velocity == 0):
-					time_stamp = event.tick / resolution / beats
+				if is_note_off:
+					time_stamp = event.tick / self.resolution / self.beats
 					key = event.channel << 8 | event.pitch
 					if key in incomplete_2nd:
 						duration = (time_stamp - incomplete_2nd[key][0])
-						histogram[0 if is_major_scale else 1][((key & 0xFF) - note_offset) % 12] += duration
-
-						if duration < 0:
-							print("DEBUG POINT!!")
+						if duration >= 0:
+							noduvels[event.channel].append(MidiNote(event.pitch, incomplete_2nd[key][0], time_stamp, incomplete_2nd[key][1]))
+						else:
+							print('DEBUG POINT!!')
 
 						del incomplete_2nd[key]
 					elif key in incomplete:
 						duration = (time_stamp - incomplete[key][0])
-						histogram[0 if is_major_scale else 1][((key & 0xFF) - note_offset) % 12] += duration
-
-						if duration < 0:
-							print("DEBUG POINT!!")
+						if duration >= 0:
+							noduvels[event.channel].append(MidiNote(event.pitch, incomplete[key][0], time_stamp, incomplete[key][1]))
+						else:
+							print('DEBUG POINT!!')
 
 						del incomplete[key]
 					else:
-						print("[WARNING] Cannot find NoteOn before NoteOff")
+						print('[WARNING] Cannot find NoteOn before NoteOff')
 
-			if cannot_process:
-				break
+		return noduvels, getOffsetBySharps(self.num_sharps, self.is_major_scale)
 
-		print("File: {0}".format(file_name))
-		# print("    RESOLUTION = {0}".format(resolution))
-		# print("    BPM = {0}".format(bpm))
-		# print("    NUM_SHARPS = {0}".format(num_sharp))
-		# print("    SCALE = {0}".format('Major' if not is_major_scale else 'Minor'))
+
+if __name__ == '__main__':
+
+	histogram = [[0]*12 for i in range(2)]
+
+	all_files = getFileList('data', ['.mid', '.midi'])
+
+	for file_name in all_files:
+
+		try:
+			pattern = midi.read_midifile(file_name)
+		except Exception as ex:
+			if len(ex.args) >= 2:
+				if ex.args[1] == b'RIFF':
+					print('ERROR(RMID format): {0}'.format(file_name))
+					continue
+				elif ex.args[1] == b'':
+					print('ERROR(Empty file): {0}'.format(file_name))
+					continue
+
+			print('ERROR({1}): {0}'.format(file_name, ex.args[0]))
+			continue
+
+		midi_feature = MidiStruct(pattern)
+		midi_notes, note_offset = midi_feature.getFullNotes()
+
+		histogram_scale = histogram[0 if midi_feature.is_major_scale else 1]
+
+		for notes_in_channel in midi_notes:
+			for note in notes_in_channel:
+				duration = note.time_end - note.time_beg
+				if note.pitch > note_offset and duration > 0:
+					histogram_scale[(note.pitch- note_offset) % 12] += duration
+
+		if midi_feature.scale_verified:
+			print('File: {0} - {1}({2})'.format(file_name, 'major' if midi_feature.is_major_scale else 'minor', getKeySignatureBySharps(midi_feature.num_sharps, midi_feature.is_major_scale)))
+		else:
+			print(f'File: {file_name}')
 
 	for octave in histogram:
 		sum = 1
@@ -193,4 +235,6 @@ if __name__ == "__main__":
 				octave[i] = octave[i] / sum
 
 	print('DONE')
+
+	# TODO(ykahn): Let's draw a graph, not text
 	print(histogram)
