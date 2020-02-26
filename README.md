@@ -24,6 +24,8 @@ https://www.kaggle.com/ 의 Classical Music MIDI (License: Unknown)
 | A | 0.10981539571794353 | 0.037863961303099776 |
 | B | 0.08248018149817357 |                      |
 
+![result](result.png)
+
 하지만 다른 장르들을 돌려 보면, `F`나 `Bb`의 비중이 이것보다는 높게 나온다.
 
 ### Reference

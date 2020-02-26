@@ -1,5 +1,11 @@
 import os
 import midi
+
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.ticker import PercentFormatter
+
+from functools import reduce
 from typing import List, Tuple
 
 
@@ -135,6 +141,12 @@ class MidiStruct:
 						self.max_channel = event.channel
 
 	def getFullNotes(self) -> Tuple[List[List[MidiNote]], int]:
+		""" Get full notes for each channel in MIDI
+
+		:param
+		:return: (Result[channel][note_sequnece]: MidiNote, offset from C)
+		:rtype: Tuple[List[List[MidiNote]], int]
+		"""
 
 		noduvels = [[] for i in range(self.max_channel + 1)]
 
@@ -225,16 +237,31 @@ if __name__ == '__main__':
 		else:
 			print(f'File: {file_name}')
 
+	# Result
+	# histogram = [[15683.887337963031, 3093.279027777861, 10735.73865740727, 4439.18699074093, 14634.81780092495, 9808.816550925509, 3388.6425868056467, 15203.483067129102, 5248.000920139239, 11730.83645254645, 4044.7510532408332, 8810.800283564655], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]]
+	# print(histogram)
+
+	# Normalize
+	normalized = []
 	for octave in histogram:
-		sum = 1
-		for note in octave:
-			sum += note
-		
-		if sum > 0:
-			for i in range(len(octave)):
-				octave[i] = octave[i] / sum
+		sum = reduce(lambda a, b: a + b, octave)
+		normalized.append(list(map(lambda val: (val / sum) if sum > 0 else 0, octave)))
 
+	# print(normalized)
 	print('DONE')
+	
 
-	# TODO(ykahn): Let's draw a graph, not text
-	print(histogram)
+	x_label = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B']
+	x_index = np.arange(len(x_label))
+
+	plt.bar(x_index, list(map(lambda val: val*100, normalized[0])))
+	
+	plt.title('The stabilities of the 12 tones in the major key', fontsize=14)
+	plt.xlabel('Notes', fontsize=12)
+	plt.ylabel('Percentage(%)', fontsize=12)
+
+	plt.gca().yaxis.set_major_formatter(PercentFormatter())
+
+	plt.xticks(x_index, x_label, fontsize=10)
+
+	plt.show()
