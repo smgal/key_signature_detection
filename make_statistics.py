@@ -150,11 +150,18 @@ class MidiStruct:
 
 		noduvels = [[] for i in range(self.max_channel + 1)]
 
+		class RefNote:
+			time_stamp: int
+			velocity: int
+
+			def __init__(self, time_stamp: int, velocity: int):
+				self.time_stamp = time_stamp
+				self.velocity = velocity
+
 		for track in self.tracks:
 
-			# FIXME(ykahn): It should be created using List.
-			incomplete = {}
-			incomplete_2nd = {}
+			# active_notes[key] = [RefNote]
+			active_notes = {}
 
 			for event in track:
 				is_note_on = isinstance(event, midi.events.NoteOnEvent) and event.velocity > 0
@@ -167,34 +174,31 @@ class MidiStruct:
 				if is_note_on:
 					time_stamp = event.tick / self.resolution / self.beats
 					key = event.channel << 8 | event.pitch
-					if not key in incomplete:
-						incomplete[key] = [time_stamp, event.velocity]
-					elif not key in incomplete_2nd:
-						incomplete_2nd[key] = [time_stamp, event.velocity]
+
+					if key in active_notes:
+						active_notes[key].append(RefNote(time_stamp, event.velocity))
 					else:
-						print('[WARNING] Too many intersections')
+						active_notes[key] = [RefNote(time_stamp, event.velocity), ]
 
 				if is_note_off:
 					time_stamp = event.tick / self.resolution / self.beats
 					key = event.channel << 8 | event.pitch
-					if key in incomplete_2nd:
-						duration = (time_stamp - incomplete_2nd[key][0])
+
+					if key in active_notes and len(active_notes[key]) > 0:
+						duration = (time_stamp - active_notes[key][0].time_stamp)
 						if duration >= 0:
-							noduvels[event.channel].append(MidiNote(event.pitch, incomplete_2nd[key][0], time_stamp, incomplete_2nd[key][1]))
+							noduvels[event.channel].append(MidiNote(event.pitch, active_notes[key][0].time_stamp, time_stamp, active_notes[key][0].velocity))
 						else:
 							print('DEBUG POINT!!')
 
-						del incomplete_2nd[key]
-					elif key in incomplete:
-						duration = (time_stamp - incomplete[key][0])
-						if duration >= 0:
-							noduvels[event.channel].append(MidiNote(event.pitch, incomplete[key][0], time_stamp, incomplete[key][1]))
-						else:
-							print('DEBUG POINT!!')
+						del active_notes[key][0]
 
-						del incomplete[key]
+					elif isinstance(event, midi.events.NoteOnEvent):
+						# Skip meaningless note (Note on with 0-velocity)
+						pass
 					else:
-						print('[WARNING] Cannot find NoteOn before NoteOff')
+						# Skip meaningless note (Note off without Note on)
+						pass
 
 		return noduvels, getOffsetBySharps(self.num_sharps, self.is_major_scale)
 
@@ -222,6 +226,12 @@ if __name__ == '__main__':
 			continue
 
 		midi_feature = MidiStruct(pattern)
+
+		if midi_feature.scale_verified:
+			print('File: {0} - {1}({2})'.format(file_name, 'major' if midi_feature.is_major_scale else 'minor', getKeySignatureBySharps(midi_feature.num_sharps, midi_feature.is_major_scale)))
+		else:
+			print(f'File: {file_name}')
+
 		midi_notes, note_offset = midi_feature.getFullNotes()
 
 		histogram_scale = histogram[0 if midi_feature.is_major_scale else 1]
@@ -231,11 +241,6 @@ if __name__ == '__main__':
 				duration = note.time_end - note.time_beg
 				if note.pitch > note_offset and duration > 0:
 					histogram_scale[(note.pitch- note_offset) % 12] += duration
-
-		if midi_feature.scale_verified:
-			print('File: {0} - {1}({2})'.format(file_name, 'major' if midi_feature.is_major_scale else 'minor', getKeySignatureBySharps(midi_feature.num_sharps, midi_feature.is_major_scale)))
-		else:
-			print(f'File: {file_name}')
 
 	# Result
 	# histogram = [[15683.887337963031, 3093.279027777861, 10735.73865740727, 4439.18699074093, 14634.81780092495, 9808.816550925509, 3388.6425868056467, 15203.483067129102, 5248.000920139239, 11730.83645254645, 4044.7510532408332, 8810.800283564655], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]]
@@ -247,7 +252,7 @@ if __name__ == '__main__':
 		sum = reduce(lambda a, b: a + b, octave)
 		normalized.append(list(map(lambda val: (val / sum) if sum > 0 else 0, octave)))
 
-	# print(normalized)
+	print(normalized)
 	print('DONE')
 	
 
